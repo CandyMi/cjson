@@ -8,7 +8,7 @@ default :
 CFLAGS = -O2 -Wall -shared -fPIC
 CC = cc
 
-INCLUDES = -I. -I../../../src -I../../inc
+INCLUDES = -I. -I../../src -I../../inc
 LIBS = -L../ -L../../ -L../../../
 DLL = -lcore
 
