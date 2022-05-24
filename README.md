@@ -2,7 +2,7 @@
 
   JSON library written using Lua 5.3+ C API.
 
-## Instgall
+## Install
 
   1. clone to `3rd`.
 
