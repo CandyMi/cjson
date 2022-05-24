@@ -14,4 +14,4 @@ DLL = -lcore
 
 build:
 	@$(CC) -o ljson.so decoder.c encoder.c $(INCLUDES) $(LIBS) $(CFLAGS) $(DLL)
-	@mv *.so ../../
+	@mv *.so ../
