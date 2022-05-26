@@ -45,21 +45,49 @@ static inline const char* json_get_error(lua_State *L, const char *buffer, size_
 
 static inline int json_decode_cstring(lua_State *L, const char* buffer, size_t bsize) {
   luaL_Buffer B;
-  luaL_buffinit(L, &B);
-  size_t pos = 1;
-  while (pos < bsize)
-  {
-    if (buffer[pos] == '"' && buffer[pos-1] != '\\')
-      break;
-    luaL_addchar(&B, buffer[pos++]);
+  luaL_buffinitsize(L, &B, json_buffer_size);
+  size_t pos = 1; size_t s = 1;
+  char u8buffer[4];
+  while (pos < bsize) {
+    /* 处理特殊符号 */
+    if (buffer[pos] == '\\') {
+      /* 处理双引号转义符 */
+      if (buffer[pos+1] == '"' || buffer[pos+1] == '\\') {
+        luaL_addlstring(&B, buffer + s, pos - s);
+        luaL_addchar(&B, buffer[pos+1]);
+        s = pos += 2;
+        continue;
+      }
+      /* 处理Unicode转义符 */
+      if (buffer[pos+1] == 'u' && bsize - pos > 5) {
+        int code = json_cstring_to_utf8_hex(buffer + pos + 2);
+        if (code == -1) {
+          pos++; continue;
+        }
+        int len = json_cstring_to_utf8(u8buffer, code);
+        if (code == -1) {
+          pos++; continue;
+        }
+        luaL_addlstring(&B, buffer + s, pos - s);
+        luaL_addlstring(&B, u8buffer, len);
+        s = pos += 6;
+        continue;
+      }
+    }
+    if (buffer[pos] == '"') {
+      if (buffer[pos-1] != '\\' || buffer[pos-2] == '\\') {
+        luaL_addlstring(&B, buffer + s, pos - s);
+        break;
+      }
+    }
+    pos++;
   }
+
   if (pos == bsize)
     return luaL_error(L, "[json decode]: cstring was invalid in `%s`.", json_get_error(L, buffer, bsize));
 
   luaL_pushresult(&B);
-  size_t blen;
-  lua_tolstring(L, -1, &blen);
-  return blen+2;
+  return pos + 1;
 }
 
 static inline int json_decode_number(lua_State *L, const char* buffer, size_t bsize) {
@@ -176,6 +204,8 @@ static inline int json_decode_array(lua_State *L, const char* buffer, size_t bsi
         if (json_comma)
           return luaL_error(L, "[json decode]: invalide array buffer split in `%s`.", json_get_error(L, buffer, bsize));
         buffer++; bsize--; pos++;
+        ret = json_next_char(buffer, bsize);
+        buffer += ret; bsize -= ret; pos += ret;
         luaL_setmetatable(L, "json_array");
         return pos;
       default:
@@ -220,6 +250,8 @@ static inline int json_decode_object(lua_State *L, const char* buffer, size_t bs
         if (json_comma)
           return luaL_error(L, "[json decode]: Invalid object comma in `%s`", json_get_error(L, buffer, bsize));
         buffer++; bsize--; pos++;
+        ret = json_next_char(buffer, bsize);
+        buffer += ret; bsize -= ret; pos += ret;
         luaL_setmetatable(L, "json_table");
         return pos;
       default:
@@ -302,9 +334,13 @@ static inline int json_decode_table(lua_State *L, const char* buffer, size_t bsi
     return luaL_error(L, "[json decode]: empty json buffer.");
 
   lua_settop(L, 1);
+  buffer += pos; bsize -= pos;
 
-  json_decode_object(L, buffer + pos, bsize - pos);
-
+  /* 解析完毕需要检查结果字符串结尾. */
+  pos = json_decode_object(L, buffer, bsize);
+  if (pos != bsize)
+    return luaL_error(L, "[json decode]: decoder failed in `%s`", json_get_error(L, buffer + pos, bsize - pos));
+  /* 解析完毕需要检查堆栈是否正确 */
   if (lua_gettop(L) != 2)
     return luaL_error(L, "[json decode]: decoder failed in top %d.", lua_gettop(L));
   return 1;

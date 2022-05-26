@@ -174,7 +174,7 @@ static inline int json_encode_table(lua_State *L, struct json_table_t *json, int
 
 static inline void json_string_wrap(lua_State *L, const char* str, size_t len, int mode) {
   luaL_Buffer TB;
-  luaL_buffinit(L, &TB);
+  luaL_buffinitsize(L, &TB, json_buffer_size);
 
   luaL_addchar(&TB, '\"');
   for (size_t i = 0; i < len; i++) {
@@ -194,8 +194,6 @@ static inline void json_string_wrap(lua_State *L, const char* str, size_t len, i
 static inline void json_key_value_to_string(lua_State *L, luaL_Buffer *B, struct json_item_t* k, struct json_item_t* v, int mode) {
 
   luaL_Buffer TB;
-  if (v->type == XRTYPE_TABLE)
-    luaL_buffinit(L, &TB);
 
   switch (v->type)
   {
@@ -215,7 +213,9 @@ static inline void json_key_value_to_string(lua_State *L, luaL_Buffer *B, struct
       json_string_wrap(L, v->str, (size_t)v->slen, 0);
       break;
     case XRTYPE_TABLE:
+      luaL_buffinitsize(L, &TB, json_buffer_size);
       json_to_string(L, &TB, v->t);
+      luaL_pushresult(&TB);
       break;
     default:
       luaL_error(L, "[json encode]: Invalid xrio value type `%s`.", v->type);
@@ -284,5 +284,7 @@ int ljson_encode(lua_State *L){
   luaL_buffinit(L, &B);
   json_to_string(L, &B, json);
   luaL_pushresult(&B);
+  if (lua_gettop(L) > 2)
+    return luaL_error(L, "[json encode]: internal failed. %d", lua_gettop(L));
   return 1;
 }

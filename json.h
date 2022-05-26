@@ -14,6 +14,12 @@
   #define xrio_free free
 #endif
 
+#define json_buffer_size (1024)
+
+int json_cstring_to_utf8_hex(const char *hex);
+
+int json_cstring_to_utf8(char *utf8, int codepoint);
+
 int ljson_encode(lua_State *L);
 
 int ljson_decode(lua_State *L);
