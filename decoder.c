@@ -21,7 +21,7 @@
 static inline size_t json_next_char(const char* ptr, size_t len) {
   size_t pos = 0;
   for (;pos < len; pos++)
-    if (!isspace(ptr[pos]))
+    if (!isspace((uint8_t)ptr[pos]))
       break;
   return pos;
 }
@@ -44,8 +44,8 @@ static inline const char* json_get_error(lua_State *L, const char *buffer, size_
 }
 
 static inline int json_decode_cstring(lua_State *L, const char* buffer, size_t bsize) {
-  luaL_Buffer B;
-  luaL_buffinitsize(L, &B, json_buffer_size);
+  xrio_Buffer B;
+  xrio_buffinit(L, &B);
   size_t pos = 1; size_t s = 1;
   char u8buffer[4];
   while (pos < bsize) {
@@ -53,8 +53,8 @@ static inline int json_decode_cstring(lua_State *L, const char* buffer, size_t b
     if (buffer[pos] == '\\') {
       /* 处理双引号转义符 */
       if (buffer[pos+1] == '"' || buffer[pos+1] == '\\') {
-        luaL_addlstring(&B, buffer + s, pos - s);
-        luaL_addchar(&B, buffer[pos+1]);
+        xrio_addlstring(&B, buffer + s, pos - s);
+        xrio_addlstring(&B, &buffer[pos+1], 1);
         s = pos += 2;
         continue;
       }
@@ -65,28 +65,30 @@ static inline int json_decode_cstring(lua_State *L, const char* buffer, size_t b
           pos++; continue;
         }
         int len = json_cstring_to_utf8(u8buffer, code);
-        if (code == -1) {
+        if (len == -1) {
           pos++; continue;
         }
-        luaL_addlstring(&B, buffer + s, pos - s);
-        luaL_addlstring(&B, u8buffer, len);
+        xrio_addlstring(&B, buffer + s, pos - s);
+        xrio_addlstring(&B, u8buffer, len);
         s = pos += 6;
         continue;
       }
     }
     if (buffer[pos] == '"') {
       if (buffer[pos-1] != '\\' || buffer[pos-2] == '\\') {
-        luaL_addlstring(&B, buffer + s, pos - s);
+        xrio_addlstring(&B, buffer + s, pos - s);
         break;
       }
     }
     pos++;
   }
 
-  if (pos == bsize)
-    return luaL_error(L, "[json decode]: cstring was invalid in `%s`.", json_get_error(L, buffer, bsize));
+  if (pos == bsize){
+    xrio_pushresult(&B);
+    luaL_error(L, "[json decode]: cstring was invalid in `%s`.", json_get_error(L, buffer, bsize));
+  }
 
-  luaL_pushresult(&B);
+  xrio_pushresult(&B);
   return pos + 1;
 }
 
@@ -102,7 +104,7 @@ static inline int json_decode_number(lua_State *L, const char* buffer, size_t bs
       sig = 1;
       continue;
     }
-    if (code == ',' || code == ']' || code == '}')
+    if (code == ' ' || code == ',' || code == ']' || code == '}')
       break;
     /* 检查合法性 */
     if (pos > 40)
@@ -119,10 +121,17 @@ static inline int json_decode_number(lua_State *L, const char* buffer, size_t bs
 }
 
 static inline int json_decode_boolean(lua_State *L, const char* buffer, size_t bsize, const char *cmp, size_t csize) {
-  if (bsize < csize)
+  if (bsize <= csize)
     luaL_error(L, "[json decode]: error boolean value in `%s`.", json_get_error(L, buffer, bsize));
   
   if (strncmp(buffer, cmp, csize))
+    luaL_error(L, "[json decode]: invalid char in `%s`.", json_get_error(L, buffer, bsize));
+
+  buffer += csize; bsize -= csize;
+  size_t pos = json_next_char(buffer, bsize);
+  buffer += pos; bsize -= pos;
+
+  if (*buffer != ',' && *buffer != ']' && *buffer != '}')
     luaL_error(L, "[json decode]: invalid char in `%s`.", json_get_error(L, buffer, bsize));
 
   return csize;
@@ -140,7 +149,8 @@ static inline int json_decode_array(lua_State *L, const char* buffer, size_t bsi
   size_t idx = 1;
   size_t pos = 0;
   size_t ret = 0;
-  lua_createtable(L, 8, 0);
+
+  lua_newtable(L);
   while (bsize)
   {
     switch (buffer[0]) {
@@ -235,7 +245,7 @@ static inline int json_decode_object(lua_State *L, const char* buffer, size_t bs
   size_t ret = json_next_char(buffer, bsize);
   buffer += ret; bsize -= ret; pos += ret;
 
-  lua_createtable(L, 0, 8);
+  lua_newtable(L);
   while (bsize)
   {
     /* key */
@@ -353,5 +363,24 @@ int ljson_decode(lua_State *L) {
   if (bsize < 2)
     return luaL_error(L, "[json decode]: Invalid json buffer.");
 
+  /* 检查是否需要进行`jsonp`探测 */
+  if (lua_isboolean(L, 2) && lua_toboolean(L, 2)) {
+    /* left */
+    while (bsize)
+    {
+      if (*buffer == '{' || *buffer == '[')
+        break;
+      bsize--; buffer++;
+    }
+    /* right */
+    while (bsize)
+    {
+      if (buffer[bsize - 1] == '}' || buffer[bsize - 1] == ']')
+        break;
+      bsize--;
+    }
+    if (!bsize)
+      return luaL_error(L, "[json decode]: Invalid json buffer.");
+  }
   return json_decode_table (L, buffer, bsize);
 }

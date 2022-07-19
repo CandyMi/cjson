@@ -1,290 +1,212 @@
 #include "json.h"
 
-enum json_type_t {
-  XRTYPE_INTEGER  = 10,
-  XRTYPE_NUMBER,   
-  XRTYPE_STRING,
-  XRTYPE_BOOLEAN,
-  XRTYPE_NULL,
-  XRTYPE_TABLE,
+/* json mode */
+#define j_table (0)
+#define j_array (1)
+
+static char json_start[2] = {'{', '['};
+static char json_over[2]  = {'}', ']'};
+
+#define json_block_start(B, mode) xrio_addchar(B, json_start[mode])
+#define json_block_over(B, mode)  xrio_addchar(B, json_over[mode])
+
+static inline int json_encode_table(lua_State *L, int mode, xrio_Buffer *B);
+
+/* 参考查表 */
+static const char *char2escape[256] = {
+  "\\u0000", "\\u0001", "\\u0002", "\\u0003",
+  "\\u0004", "\\u0005", "\\u0006", "\\u0007",
+  "\\b", "\\t", "\\n", "\\u000b",
+  "\\f", "\\r", "\\u000e", "\\u000f",
+  "\\u0010", "\\u0011", "\\u0012", "\\u0013",
+  "\\u0014", "\\u0015", "\\u0016", "\\u0017",
+  "\\u0018", "\\u0019", "\\u001a", "\\u001b",
+  "\\u001c", "\\u001d", "\\u001e", "\\u001f",
+  NULL, NULL, "\\\"", NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, "\\/",
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, "\\\\", NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, "\\u007f",
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 };
 
-struct json_item_t {
-  uint32_t type;
-  uint32_t slen;
-  union {
-    lua_Integer i;
-    lua_Number  n;
-    const char *str;
-    struct json_table_t *t;
-  };
-  struct json_item_t *next;
-};
-
-struct json_table_t {
-  size_t mode;
-  struct json_item_t *item;
-};
-
-#define json_block_start(B, mode)   if (mode) luaL_addchar(B, '['); else luaL_addchar(B, '{')
-#define json_block_over(B, mode)    if (mode) luaL_addchar(B, ']'); else luaL_addchar(B, '}')
-
-static inline int json_encode_table(lua_State *L, struct json_table_t *json, int idx);
-
-static inline void json_to_string(lua_State *L, luaL_Buffer *B, struct json_table_t* json);
-
-static inline struct json_table_t *json_new() {
-  struct json_table_t* json = xrio_malloc(sizeof(struct json_table_t));
-  json->item = NULL; json->mode = 0;
-  return json;
-}
-
-static inline void json_free(struct json_table_t * tab) {
-  if (tab)
-    xrio_free(tab);
-}
-
-
-static inline struct json_item_t * json_item_new() {
-  struct json_item_t* value = xrio_malloc(sizeof(struct json_item_t));
-  value->t = NULL; value->type = 0; value ->next = NULL;
-  return value;
-}
-
-
-static inline void json_item_free(struct json_item_t * item) {
-  if (item)
-    xrio_free(item);
-}
-
-/* 检查内部元表是否存在 */
-static inline int json_has_array_metatable(lua_State *L, int idx, const char* name) {
-  if (!lua_getmetatable(L, idx))
-    return 0;
-  luaL_getmetatable(L, name);
-  int r = lua_rawequal(L, -1, -2);
-  lua_pop(L, 2);
-  return r;
-}
-
-static inline struct json_item_t* json_fetch_key(lua_State *L, int kidx, size_t *idx) {
-  int ktype = lua_type(L, kidx);
-
-  struct json_item_t* key = json_item_new();
-
-  switch (ktype)
-  {
-    case LUA_TNUMBER:
-      if (lua_isinteger(L, kidx)){
-        key->type = XRTYPE_INTEGER;
-        key->i = lua_tointeger(L, kidx);
-        *idx = key->i;
-      } else {
-        key->type = XRTYPE_NUMBER;
-        key->n = lua_tonumber(L, kidx);
-      }
-      break;
-    case LUA_TSTRING:
-      key->type = XRTYPE_STRING;
-      key->str = lua_tolstring(L, kidx, (size_t*)&key->slen);
-      break;
-    default:
-      luaL_error(L, "[json encode]: Invalid key type `%s`.", lua_typename(L, ktype));
+static inline void json_pushstring(lua_State *L, xrio_Buffer *B, int idx, int mode) {
+  size_t bsize;
+  const char* buffer = lua_tolstring(L, idx, &bsize);
+  if (!bsize) {
+    if (mode)
+      xrio_pushliteral(B, "\"\":");
+    else
+      xrio_pushliteral(B, "\"\"");
+    return ;
   }
 
-  return key;
+  const char *escstr = NULL;
+  xrio_addchar(B, '"');
+  for (size_t i = 0; i < bsize; i++)
+  {
+    int code = buffer[i];
+    escstr = char2escape[(unsigned char)code];
+    if (!escstr)
+      xrio_addchar(B, code);
+    else
+      xrio_addstring(B, escstr);
+  }
+  if (mode)
+    xrio_pushliteral(B, "\":");
+  else
+    xrio_addchar(B, '"');
 }
 
-static inline struct json_item_t* json_fetch_val(lua_State *L, int vidx) {
-  int vtype = lua_type(L, vidx);
+static inline int json_encode_table(lua_State *L, int mode, xrio_Buffer *B) {
+  int idx  = lua_gettop(L);
+  int kidx = idx + 1;
+  int vidx = idx + 2;
+  uint32_t times = 0;
 
-  struct json_item_t* val = json_item_new();
+  /* 数组类型 */
+  if (lua_rawlen(L, idx) > 0)
+    mode = j_array;
 
-  switch (vtype)
-  {
-    case LUA_TLIGHTUSERDATA:
-      if (lua_touserdata(L, vidx) != NULL)
-        luaL_error(L, "[json encode]: userdata must be null.");
-      val->type = XRTYPE_NULL;
-      break;
-    case LUA_TNUMBER:
-      if (lua_isinteger(L, vidx)){
-        val->type = XRTYPE_INTEGER;
-        val->i = lua_tointeger(L, vidx);
-      }else{
-        val->type = XRTYPE_NUMBER;
-        val->n = lua_tonumber(L, vidx);
-        if (val->n == NAN || val->n == INFINITY)
-          luaL_error(L, "Get `nan` or `inf` in lua_Number value.");
-      }
-      break;
-    case LUA_TBOOLEAN:
-      val->type = XRTYPE_BOOLEAN;
-      val->i = lua_toboolean(L, vidx);
-      break;
-    case LUA_TSTRING:
-      val->type = XRTYPE_STRING;
-      val->str = lua_tolstring(L, vidx, (size_t*)&val->slen);
-      break;
-    case LUA_TTABLE:
-      val->type = XRTYPE_TABLE;
-      val->t = json_new();
-      json_encode_table(L, val->t, vidx);
-      break;
-    default:
-      luaL_error(L, "[json encode]: Invalid value type `%s`.", lua_typename(L, vtype));
+  /* 如果被`json_array_mt`标记 */
+  if (mode == j_table && lua_getmetatable(L, idx)) {
+    luaL_getmetatable(L, "json_array_mt");
+    if (lua_rawequal(L, -1 , -2))
+      mode = j_array;
+    lua_pop(L, 2);
   }
 
-  return val;
-}
-
-/* Table */
-static inline int json_encode_table(lua_State *L, struct json_table_t *json, int idx) {
-
-  json->mode = 0;
-  if (json_has_array_metatable(L, idx, "json_array"))
-    json->mode = 1;
-  
-  struct json_item_t* item = NULL;
-  size_t kindex = -1;
-  size_t index = 0;
+  size_t pos = xrio_buffgetidx(B);
 
   lua_pushnil(L);
-  while (lua_next(L, idx))
+  while(lua_next(L, idx))
   {
-    index++;
-    struct json_item_t* key = json_fetch_key(L, idx + 1, &kindex);
-    struct json_item_t* val = json_fetch_val(L, idx + 2);
-    // printf("kindex = %zu, index = %zu\n", kindex, index);
+    int ktype = lua_type(L, kidx); int vtype = lua_type(L, vidx);
 
-    if (!item) {
-      item = key->next = val;
-      json->item = key;
+    if (times++) {
+      xrio_addchar(B, ',');
     } else {
-      item->next = key;
-      item = key->next = val;
+      if (mode == j_array && (ktype != LUA_TNUMBER || lua_tointeger(L, kidx) != times))
+        mode = j_table;
+      json_block_start(B, mode);
     }
-    
+
+    if (mode == j_table) {
+      switch (ktype)
+      {
+        case LUA_TNUMBER:
+          if (lua_isinteger(L, kidx))
+            xrio_pushfstring(B, "\"%I\":", lua_tointeger(L, kidx));
+          else {
+            lua_Number n = lua_tonumber(L, kidx);
+            if (isnan(n) || isinf(n)) {
+              xrio_pushresult(B);
+              return luaL_error(L, "Cannot serialise number: must not be NaN or Infinity");
+            }
+            xrio_pushfstring(B, "\"%f\":", n);
+          }
+          break;
+        case LUA_TSTRING:
+          json_pushstring(L, B, kidx, 1);
+          break;
+        default:
+          xrio_pushresult(B);
+          luaL_error(L, "[json encode]: Invalid key type `%s`.", lua_typename(L, ktype));
+      }
+    } else {
+      /* 如果检查到稀疏数组则转为哈希表达, 指针回溯并丢弃所有已有数据 */
+      if (ktype == LUA_TNUMBER && lua_isinteger(L, kidx) && lua_tointeger(L, kidx) != times) {
+        mode = j_table; times = 0; xrio_buffreset(B, pos);
+        lua_pop(L, 2); lua_pushnil(L);
+        continue;
+      }
+    }
+
+    switch (vtype)
+    {
+      case LUA_TLIGHTUSERDATA:
+        xrio_pushliteral(B, "null");
+        break;
+      case LUA_TNUMBER:
+        if (lua_isinteger(L, vidx))
+          xrio_pushfstring(B, "%I", (lua_Integer)lua_tointeger(L, vidx));
+        else {
+          lua_Number n = lua_tonumber(L, vidx);
+          if (isnan(n) || isinf(n)) {
+            xrio_pushresult(B);
+            return luaL_error(L, "Cannot serialise number: must not be NaN or Infinity");
+          }
+          xrio_pushfstring(B, "%f", n);
+        }
+        break;
+      case LUA_TBOOLEAN:
+        if (lua_toboolean(L, vidx))
+          xrio_pushliteral(B, "true");
+        else
+          xrio_pushliteral(B, "false");
+        break;
+      case LUA_TSTRING:
+        json_pushstring(L, B, vidx, 0);
+        break;
+      case LUA_TTABLE:
+        json_encode_table(L, j_table, B);
+        break;
+      default:
+        xrio_pushresult(B);
+        luaL_error(L, "[json encode]: Invalid value type `%s`.", lua_typename(L, vtype));
+    }
     lua_pop(L, 1);
   }
-  if (kindex == index)
-    json->mode = 1;
+
+  if (!times)
+    json_block_start(B, mode);
+  json_block_over(B, mode);
+
   return 0;
 }
 
-static inline void json_string_wrap(lua_State *L, const char* str, size_t len, int mode) {
-  luaL_Buffer TB;
-  luaL_buffinitsize(L, &TB, json_buffer_size);
+static inline int json_init_encode(lua_State *L) {
+  xrio_Buffer B;
+  xrio_buffinit(L, &B);
 
-  luaL_addchar(&TB, '\"');
-  for (size_t i = 0; i < len; i++) {
-    if (str[i] == '\"')
-      luaL_addlstring(&TB, "\\\"", 2);
-    else
-      luaL_addchar(&TB, str[i]);
+  bool jsonp = lua_isboolean(L, 2) && lua_toboolean(L, 2) ? 1 : 0;
+  if (jsonp) {
+    xrio_addstring(&B, lua_tostring(L, 3));
+    xrio_addchar(&B, '(');
   }
-
-  if (mode)
-    luaL_addlstring(&TB, "\":", 2);
-  else
-    luaL_addchar(&TB, '\"');
-  luaL_pushresult(&TB);
-}
-
-static inline void json_key_value_to_string(lua_State *L, luaL_Buffer *B, struct json_item_t* k, struct json_item_t* v, int mode) {
-
-  luaL_Buffer TB;
-
-  switch (v->type)
-  {
-    case XRTYPE_NULL:
-      lua_pushliteral(L, "null");
-      break;
-    case XRTYPE_BOOLEAN:
-      lua_pushstring(L, (v->i ? "true" : "false"));
-      break;
-    case XRTYPE_INTEGER:
-      lua_pushfstring(L, "%I", v->i);
-      break;
-    case XRTYPE_NUMBER:
-      lua_pushfstring(L, "%f", v->n);
-      break;
-    case XRTYPE_STRING:
-      json_string_wrap(L, v->str, (size_t)v->slen, 0);
-      break;
-    case XRTYPE_TABLE:
-      luaL_buffinitsize(L, &TB, json_buffer_size);
-      json_to_string(L, &TB, v->t);
-      luaL_pushresult(&TB);
-      break;
-    default:
-      luaL_error(L, "[json encode]: Invalid xrio value type `%s`.", v->type);
-  }
-
-  if (mode == 0) {
-    switch (k->type)
-    {
-      case XRTYPE_INTEGER:
-        lua_pushfstring(L, "\"%d\":", k->i);
-        break;
-      case XRTYPE_NUMBER:
-        lua_pushfstring(L, "\"%f\":", k->n);
-        break;
-      case XRTYPE_STRING:
-        json_string_wrap(L, k->str, (size_t)k->slen, 1);
-        break;
-      default:
-        luaL_error(L, "[json encode]: Invalid xrio key type `%s`.", k->type);
-    }
-    luaL_addvalue(B);
-  }
-  luaL_addvalue(B);
-}
-
-static inline void json_to_string(lua_State *L, luaL_Buffer *B, struct json_table_t* json) {
-  json_block_start(B, json->mode);
-
-  struct json_item_t *tmp1;
-  struct json_item_t *tmp2;
-  struct json_item_t *key;
-  struct json_item_t *val;
-
-  key = json->item;
-  if (key)
-    val  = key->next;
-
-  while (key && val)
-  {
-    if (key != json->item)
-      luaL_addchar(B, ',');
-    json_key_value_to_string(L, B, key, val, json->mode);
-    tmp1 = key; tmp2 = val;
-    if ((key = val->next))
-      val = key->next;
-    json_item_free(tmp1);
-    json_item_free(tmp2);
-  }
-
-  json_block_over(B, json->mode);
-  json_free(json);
-}
-
-int ljson_encode(lua_State *L){
-  if (lua_type(L, 1) != LUA_TTABLE)
-    return luaL_error(L, "json encoder need lua table.");
-
-  /* table to json */
   lua_settop(L, 1);
-  struct json_table_t* json = json_new();
-  json_encode_table(L, json, 1);
-
-  lua_settop(L, 1);
-  /* dump string */
-  luaL_Buffer B;
-  luaL_buffinit(L, &B);
-  json_to_string(L, &B, json);
-  luaL_pushresult(&B);
-  if (lua_gettop(L) > 2)
-    return luaL_error(L, "[json encode]: internal failed. %d", lua_gettop(L));
+  json_encode_table(L, j_table, &B);
+  if (jsonp)
+    xrio_addchar(&B, ')');
+  xrio_pushresult(&B);
   return 1;
+}
+
+int ljson_encode(lua_State *L) {
+  if (lua_type(L, 1) != LUA_TTABLE)
+    return luaL_error(L, "[json encode]: need lua table.");
+
+  return json_init_encode(L);
 }
