@@ -10,6 +10,10 @@
   #define xrio_malloc malloc
 #endif
 
+#ifndef xrio_realloc
+  #define xrio_realloc realloc
+#endif
+
 #ifndef xrio_free
   #define xrio_free free
 #endif
