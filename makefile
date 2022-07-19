@@ -13,5 +13,5 @@ LIBS = -L../ -L../../ -L../../../
 DLL = -lcore
 
 build:
-	@$(CC) -o ljson.so u8.c json.c decoder.c encoder.c $(INCLUDES) $(LIBS) $(CFLAGS) $(DLL)
+	@$(CC) -o ljson.so u8.c buf.c json.c decoder.c encoder.c $(INCLUDES) $(LIBS) $(CFLAGS) $(DLL)
 	@mv *.so ../
