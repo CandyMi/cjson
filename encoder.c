@@ -122,7 +122,7 @@ static inline int json_encode_table(lua_State *L, int mode, xrio_Buffer *B) {
           else {
             lua_Number n = lua_tonumber(L, kidx);
             if (isnan(n) || isinf(n)) {
-              xrio_pushresult(B);
+              xrio_reset(B);
               return luaL_error(L, "Cannot serialise number: must not be NaN or Infinity");
             }
             xrio_pushfstring(B, "\"%f\":", n);
@@ -132,7 +132,7 @@ static inline int json_encode_table(lua_State *L, int mode, xrio_Buffer *B) {
           json_pushstring(L, B, kidx, 1);
           break;
         default:
-          xrio_pushresult(B);
+          xrio_reset(B);
           luaL_error(L, "[json encode]: Invalid key type `%s`.", lua_typename(L, ktype));
       }
     } else {
@@ -155,7 +155,7 @@ static inline int json_encode_table(lua_State *L, int mode, xrio_Buffer *B) {
         else {
           lua_Number n = lua_tonumber(L, vidx);
           if (isnan(n) || isinf(n)) {
-            xrio_pushresult(B);
+            xrio_reset(B);
             return luaL_error(L, "Cannot serialise number: must not be NaN or Infinity");
           }
           xrio_pushfstring(B, "%f", n);
@@ -174,7 +174,7 @@ static inline int json_encode_table(lua_State *L, int mode, xrio_Buffer *B) {
         json_encode_table(L, j_table, B);
         break;
       default:
-        xrio_pushresult(B);
+        xrio_reset(B);
         luaL_error(L, "[json encode]: Invalid value type `%s`.", lua_typename(L, vtype));
     }
     lua_pop(L, 1);

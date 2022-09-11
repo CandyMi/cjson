@@ -24,9 +24,19 @@ void* xrio_buffinitsize(lua_State *L, xrio_Buffer *B, size_t rsize) {
   return B->b;
 }
 
-void xrio_pushresult(xrio_Buffer *B) {
+void xrio_pushresultsize(xrio_Buffer *B, size_t size) {
   if (B->L)
-    lua_pushlstring(B->L, B->b, B->bidx);
+    lua_pushlstring(B->L, B->b, size);
+  if (B->b && B->b != B->ptr)
+    xrio_realloc(B->b, 0);
+  B->b = NULL; B->L = NULL;
+}
+
+void xrio_pushresult(xrio_Buffer *B) {
+  xrio_pushresultsize(B, B->bidx);
+}
+
+void xrio_reset(xrio_Buffer *B) {
   if (B->b && B->b != B->ptr)
     xrio_realloc(B->b, 0);
   B->b = NULL; B->L = NULL;
@@ -39,7 +49,7 @@ void xrio_addchar(xrio_Buffer *B, char c) {
 }
 
 void xrio_addlstring(xrio_Buffer *B, const char *b, size_t len) {
-  if (len > 0)
+  if (b && len > 0)
   {
     if (len == 1)
       return xrio_addchar(B, b[0]);
@@ -59,5 +69,3 @@ void xrio_addlstring(xrio_Buffer *B, const char *b, size_t len) {
 void xrio_addstring(xrio_Buffer *B, const char *b) {
   xrio_addlstring(B, b, strlen(b));
 }
-
-
