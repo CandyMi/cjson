@@ -51,9 +51,9 @@ void xrio_addlstring(xrio_Buffer *B, const char *b, size_t l);
 
 void xrio_reset(xrio_Buffer *B);
 
-int json_cstring_to_utf8_hex(const char *hex);
+int json_cstring_to_utf8_hex(const char hex[4]);
 
-int json_cstring_to_utf8(char *utf8, int codepoint);
+int json_cstring_to_utf8(char utf8[4], int codepoint);
 
 int ljson_encode(lua_State *L);
 
