@@ -36,12 +36,12 @@ static int8_t chartab[256] = {
 };
 
 /* ASCII 字符转换为整数 */
-int json_cstring_to_utf8_hex(const uint8_t hex[4])
+int json_cstring_to_utf8_hex(const char hex[4])
 {
   int code;
   int digit[4];
   for (int i = 0; i < 4; i++) {
-    code = chartab[hex[i]];
+    code = chartab[(uint8_t)hex[i]];
     if (code < 0)
       return -1;
     digit[i] = code;
@@ -51,7 +51,7 @@ int json_cstring_to_utf8_hex(const uint8_t hex[4])
 
 
 /* unicode 转换为 utf-8 */
-int json_cstring_to_utf8(char *utf8, int codepoint)
+int json_cstring_to_utf8(char utf8[4], int codepoint)
 {
   /* 0xxxxxxx */
   if (codepoint <= 0x7F) {
