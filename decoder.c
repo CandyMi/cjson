@@ -165,7 +165,7 @@ static inline int json_decode_array(lua_State *L, const char* buffer, size_t bsi
           json_start = 1;
           buffer++; bsize--; pos++;
         } else {
-          ret += json_decode_array(L, buffer, bsize);
+          ret = json_decode_array(L, buffer, bsize);
           buffer += ret; bsize -= ret; pos += ret;
           lua_rawseti(L, -2, idx++);
         }
